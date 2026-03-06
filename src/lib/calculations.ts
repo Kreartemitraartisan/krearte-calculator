@@ -46,8 +46,8 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     wastePricePerM2 = material.waste_price;
     
     walls.forEach(wall => {
-      const printWidth = wall.width + bleedWidth;
-      const printHeight = wall.height + bleedHeight;
+      const printWidth = wall.width + (bleedWidth * 2);
+      const printHeight = wall.height + (bleedHeight * 2);
       
       const panels = Math.ceil(wall.width / material.width_material);
       

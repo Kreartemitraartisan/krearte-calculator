@@ -42,7 +42,9 @@ export default function Dashboard() {
   
   // Addons
   const [is25d, setIs25d] = useState(false);
-  const [designService, setDesignService] = useState(0);
+  const [designService, setDesignService] = useState<number>(0);
+  const [designServiceCustom, setDesignServiceCustom] = useState<string>(''); // ✅ Tambahkan ini
+  const [isDesignCustom, setIsDesignCustom] = useState<boolean>(false); // ✅ Tambahkan ini
   const [imageEnhance, setImageEnhance] = useState(false);
   const [shutterstockQty, setShutterstockQty] = useState(0);
   const [installation, setInstallation] = useState(false);
@@ -103,36 +105,49 @@ export default function Dashboard() {
   const handleCalculate = () => {
     if (!user) return;
     setError('');
-    
+
+    // 1. Filter & parse valid walls (input dalam CM, convert ke meter)
     const validWalls = walls
-        .filter(w => parseFloat(w.width) > 0 && parseFloat(w.height) > 0)
-        .map(w => ({
-        width: parseFloat(w.width),
-        height: parseFloat(w.height)
-        }));
+      .filter(w => parseFloat(w.width) > 0 && parseFloat(w.height) > 0)
+      .map(w => ({
+        width: parseFloat(w.width) / 100, // cm → meter
+        height: parseFloat(w.height) / 100 // cm → meter
+      }));
 
     if (validWalls.length === 0) {
-        setError('Masukkan minimal 1 dimensi dinding yang valid');
-        return;
+      setError('Masukkan minimal 1 dimensi dinding yang valid');
+      return;
     }
 
+    // 2. Get selected material
     const material = materials.find(m => m.id === selectedMaterialId);
-    
-    const customerMaterial = materialType === 'customer' && selectedCustomerMaterialId 
-        ? customerMaterials.find(m => m.id === selectedCustomerMaterialId)
-        : undefined;
 
-    // Convert cm to meters for bleed
+    // 3. Get customer material (for Reseller B)
+    const customerMaterial = materialType === 'customer' && selectedCustomerMaterialId
+      ? customerMaterials.find(m => m.id === selectedCustomerMaterialId)
+      : undefined;
+
+    // 4. Convert bleed from cm to meters
     const bleedWidthM = bleedWidth / 100;
     const bleedHeightM = bleedHeight / 100;
-    
-    // Admin bisa pilih price type, user lain otomatis sesuai role
-    const calculationRole = user.role === 'admin' 
-        ? (priceType === 'retail' ? 'reseller' : priceType) 
-        : user.role;
+
+    // 🔍 DEBUG: Log bleed values
+    console.log('=== BLEED DEBUG ===');
+    console.log('bleedWidth (cm):', bleedWidth);
+    console.log('bleedHeight (cm):', bleedHeight);
+    console.log('bleedWidthM (m):', bleedWidthM);
+    console.log('bleedHeightM (m):', bleedHeightM);
+    console.log('Wall dimensions (m):', validWalls);
+    console.log('===================');
+
+    // 5. Determine role for calculation (admin can override)
+    const calculationRole = user.role === 'admin'
+      ? (priceType === 'retail' ? 'reseller' : priceType)
+      : user.role;
 
     try {
-        const res = calculatePrice({
+      // 6. Call calculatePrice
+      const res = calculatePrice({
         walls: validWalls,
         materialType,
         material,
@@ -142,23 +157,121 @@ export default function Dashboard() {
         bleedWidth: bleedWidthM,
         bleedHeight: bleedHeightM,
         addons: {
-            is25d,
-            designServicePrice: designService,
-            imageEnhance,
-            shutterstockQty,
-            installation,
-            installationCity,        // ✅ Dynamic dari state
-            installationType,        // ✅ Tambahkan ini
-            wallHeight: validWalls.length > 0 
-            ? validWalls.reduce((sum, w) => sum + w.height, 0) / validWalls.length  // ✅ Average height
+          is25d,
+          designServicePrice: isDesignCustom
+            ? parseInt(designServiceCustom || '0')
+            : designService,
+          imageEnhance,
+          shutterstockQty,
+          installation,
+          installationCity,
+          installationType,
+          wallHeight: validWalls.length > 0
+            ? validWalls.reduce((sum, w) => sum + w.height, 0) / validWalls.length
             : 0
         }
-        });
+      });
 
-        setResult(res);
+      // 7. Set result
+      setResult(res);
+
+      // 8. Save to History
+      saveToHistory(res, {
+        projectName,
+        walls: walls.map(w => ({
+          width: parseFloat(w.width), // simpan dalam cm
+          height: parseFloat(w.height) // simpan dalam cm
+        })).filter(w => w.width > 0 && w.height > 0),
+        materialType,
+        materialId: materialType === 'krearte' ? selectedMaterialId : null,
+        customerMaterialId: materialType === 'customer' ? selectedCustomerMaterialId : null,
+        priceType,
+        bleedWidth,
+        bleedHeight,
+        addons: {
+          is25d,
+          designService,
+          imageEnhance,
+          shutterstockQty,
+          installation,
+          installationCity,
+          installationType
+        }
+      });
+
     } catch (err) {
-        setError('Terjadi kesalahan saat menghitung. Silakan periksa input Anda.');
-        console.error('Calculation error:', err);
+      setError('Terjadi kesalahan saat menghitung. Silakan periksa input Anda.');
+      console.error('Calculation error:', err);
+    }
+  };
+
+  // Fungsi untuk save calculation ke database Supabase
+  const saveToHistory = async (
+    result: CalculationResult,
+    metadata: {
+      projectName: string;
+      walls: Array<{ width: number; height: number }>;
+      materialType: 'krearte' | 'customer';
+      materialId: number | null;
+      customerMaterialId: number | null;
+      priceType: 'retail' | 'designer' | 'reseller';
+      bleedWidth: number; // dalam cm
+      bleedHeight: number; // dalam cm
+      addons: {
+        is25d: boolean;
+        designService: number;
+        imageEnhance: boolean;
+        shutterstockQty: number;
+        installation: boolean;
+        installationCity: string;
+        installationType: 'normal' | 'panel' | 'void';
+      };
+    }
+  ) => {
+    if (!user) return;
+
+    // Convert cm to meters untuk database
+    const bleedWidthM = metadata.bleedWidth / 100;
+    const bleedHeightM = metadata.bleedHeight / 100;
+
+    const roomData = {
+      walls: metadata.walls, // dalam cm (akan disimpan sebagai cm)
+      bleedWidth: bleedWidthM, // dalam meter
+      bleedHeight: bleedHeightM // dalam meter
+    };
+
+    // Hitung design service cost (custom atau fixed)
+    const designServiceCost = isDesignCustom
+      ? parseInt(designServiceCustom || '0')
+      : metadata.addons.designService;
+
+    const { error } = await supabase
+      .from('calculations')
+      .insert({
+        user_id: user.id,
+        project_name: metadata.projectName || null,
+        room_data: roomData,
+        material_type: metadata.materialType,
+        material_id: metadata.materialId,
+        customer_material_id: metadata.customerMaterialId,
+        price_type: metadata.priceType,
+        volume_print: result.volumePrint,
+        volume_bahan: result.volumeBahan,
+        volume_waste: result.volumeWaste,
+        num_panels: result.numPanels,
+        material_cost: result.materialCost,
+        waste_cost: result.wasteCost,
+        cost_25d: result.cost25d,
+        cost_design_service: designServiceCost,
+        cost_image_enhance: metadata.addons.imageEnhance ? 50000 : 0,
+        cost_shutterstock: metadata.addons.shutterstockQty * 80000,
+        cost_installation: result.costInstallation,
+        total_cost: result.totalCost
+      });
+
+    if (error) {
+      console.error('Failed to save to history:', error);
+      // Jangan tampilkan error ke user, karena kalkulasi tetap berhasil
     }
   };
 
@@ -393,7 +506,7 @@ export default function Dashboard() {
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold text-white">Wall Dimensions</h2>
-                <button 
+                <button
                   onClick={addWall}
                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition text-sm font-medium"
                 >
@@ -403,29 +516,35 @@ export default function Dashboard() {
                   Add Wall
                 </button>
               </div>
-              
+
               <div className="space-y-3">
                 {walls.map((wall) => (
                   <div key={wall.id} className="flex gap-3 items-start p-3 bg-slate-800/50 rounded-xl border border-slate-700">
                     <div className="flex-1">
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Width (m)</label>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Width (cm)
+                      </label>
                       <input
                         type="number"
-                        step="0.01"
+                        step="1"
+                        min="0"
                         value={wall.width}
                         onChange={(e) => updateWall(wall.id, 'width', e.target.value)}
-                        placeholder="0.00"
+                        placeholder="e.g., 273"
                         className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Height (m)</label>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Height (cm)
+                      </label>
                       <input
                         type="number"
-                        step="0.01"
+                        step="1"
+                        min="0"
                         value={wall.height}
                         onChange={(e) => updateWall(wall.id, 'height', e.target.value)}
-                        placeholder="0.00"
+                        placeholder="e.g., 300"
                         className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
                       />
                     </div>
@@ -450,7 +569,7 @@ export default function Dashboard() {
               <p className="text-sm text-slate-400 mb-4">
                 Tambahkan area lebihan untuk trimming dan pemasangan
               </p>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -467,7 +586,7 @@ export default function Dashboard() {
                   />
                   <p className="text-xs text-slate-500 mt-1">Per sisi (kiri + kanan)</p>
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
                     Bleed Height (cm)
@@ -484,7 +603,7 @@ export default function Dashboard() {
                   <p className="text-xs text-slate-500 mt-1">Per sisi (atas + bawah)</p>
                 </div>
               </div>
-              
+
               <div className="mt-4 p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
                 <p className="text-sm text-indigo-300">
                   <span className="font-semibold">Total tambahan:</span> {bleedWidth * 2}cm (lebar) × {bleedHeight * 2}cm (tinggi)
@@ -623,15 +742,43 @@ export default function Dashboard() {
                 <div className="p-4 border border-slate-700 rounded-xl">
                   <p className="font-medium text-slate-200 mb-2">Design Service</p>
                   <select 
-                    onChange={(e) => setDesignService(Number(e.target.value))}
-                    value={designService}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === 'custom') {
+                        setIsDesignCustom(true);
+                        setDesignService(0);
+                      } else {
+                        setIsDesignCustom(false);
+                        setDesignService(Number(value));
+                      }
+                    }}
+                    value={isDesignCustom ? 'custom' : designService.toString()}
                     className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value={0}>No design service</option>
                     <option value={150000}>1 Day - Rp 150,000</option>
                     <option value={900000}>1 Week - Rp 900,000</option>
                     <option value={1800000}>2 Weeks - Rp 1,800,000</option>
+                    <option value="custom">Custom Amount</option>
                   </select>
+
+                  {isDesignCustom && (
+                    <div className="mt-3">
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Enter Custom Amount (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        value={designServiceCustom}
+                        onChange={(e) => setDesignServiceCustom(e.target.value)}
+                        placeholder="e.g., 500000"
+                        className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <p className="text-xs text-slate-500 mt-1">
+                        Current: <span className="text-indigo-400 font-semibold">Rp {parseInt(designServiceCustom || '0').toLocaleString('id-ID')}</span>
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Installation */}
@@ -745,80 +892,147 @@ export default function Dashboard() {
           {/* Results Section */}
           <div className="space-y-6">
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6 min-h-[600px]">
-              <h2 className="text-lg font-semibold text-white mb-6">Calculation Results</h2>
+              <h2 className="text-xl font-semibold text-white mb-6">Calculation Results</h2>
               
               {result ? (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                      <p className="text-sm text-slate-400 mb-1">Print Area</p>
-                      <p className="text-2xl font-bold text-white">{result.volumePrint.toFixed(2)} m²</p>
+                <div className="space-y-6">
+                  {/* Project Info */}
+                  {projectName && (
+                    <div className="pb-4 border-b border-slate-800">
+                      <p className="text-sm text-slate-400">Project Name</p>
+                      <p className="text-lg font-semibold text-white">{projectName}</p>
                     </div>
-                    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                      <p className="text-sm text-slate-400 mb-1">Material Needed</p>
-                      <p className="text-2xl font-bold text-white">{result.volumeBahan.toFixed(2)} m²</p>
-                    </div>
-                    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                      <p className="text-sm text-slate-400 mb-1">Number of Panels</p>
-                      <p className="text-2xl font-bold text-white">{result.numPanels}</p>
-                    </div>
-                    <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                      <p className="text-sm text-slate-400 mb-1">Waste</p>
-                      <p className="text-2xl font-bold text-orange-400">{result.volumeWaste.toFixed(2)} m²</p>
+                  )}
+
+                  {/* Wall Dimensions Detail */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Wall Dimensions</h3>
+                    <div className="space-y-2">
+                      {walls.filter(w => parseFloat(w.width) > 0 && parseFloat(w.height) > 0).map((wall, idx) => (
+                        <div key={wall.id} className="flex justify-between text-sm py-2 px-3 bg-slate-800/30 rounded-lg">
+                          <span className="text-slate-400">Wall {idx + 1}</span>
+                          <span className="text-slate-200">
+                            {wall.width} cm × {wall.height} cm = {((parseFloat(wall.width) / 100) * (parseFloat(wall.height) / 100)).toFixed(2)} m²
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
-                  <div className="border-t border-slate-700 pt-4 mt-6">
-                    <h3 className="font-semibold text-white mb-3">Cost Breakdown</h3>
+                  {/* Bleed Settings */}
+                  <div className="pb-4 border-b border-slate-800">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-slate-400">Bleed Width</span>
+                      <span className="text-slate-200">{bleedWidth} cm (kanan kiri) = {bleedWidth * 2} cm </span>
+                    </div>
+                    <div className="flex justify-between text-sm mt-1">
+                      <span className="text-slate-400">Bleed Height</span>
+                      <span className="text-slate-200">{bleedHeight} cm (atas bawah) = {bleedHeight * 2} cm </span>
+                    </div>
+                  </div>
+
+                  {/* Area Calculations */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Area Calculations</h3>
                     <div className="space-y-2">
+                      <div className="flex justify-between py-2 px-3 bg-slate-800/30 rounded-lg">
+                        <span className="text-slate-400">Print Area</span>
+                        <span className="text-white font-medium">{result.volumePrint.toFixed(2)} m²</span>
+                      </div>
+                      <div className="flex justify-between py-2 px-3 bg-slate-800/30 rounded-lg">
+                        <span className="text-slate-400">Material Needed</span>
+                        <span className="text-white font-medium">{result.volumeBahan.toFixed(2)} m²</span>
+                      </div>
+                      <div className="flex justify-between py-2 px-3 bg-slate-800/30 rounded-lg">
+                        <span className="text-slate-400">Number of Panels</span>
+                        <span className="text-white font-medium">{result.numPanels} panels</span>
+                      </div>
+                      <div className="flex justify-between py-2 px-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                        <span className="text-orange-400">Waste</span>
+                        <span className="text-orange-400 font-medium">{result.volumeWaste.toFixed(2)} m²</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Cost Breakdown */}
+                  <div className="pb-4 border-b border-slate-800">
+                    <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Cost Breakdown</h3>
+                    <div className="space-y-2 text-sm">
                       <div className="flex justify-between py-2">
                         <span className="text-slate-400">Material Cost</span>
-                        <span className="font-semibold text-slate-200">Rp {result.materialCost.toLocaleString('id-ID')}</span>
+                        <div className="text-right">
+                          <p className="text-slate-200">Rp {result.materialCost.toLocaleString('id-ID')}</p>
+                          <p className="text-xs text-slate-500">{result.volumeBahan.toFixed(2)} m² × Rp {(result.materialCost / result.volumeBahan).toLocaleString('id-ID')}/m²</p>
+                        </div>
                       </div>
+                      
                       {result.wasteCost > 0 && (
-                        <div className="flex justify-between py-2">
-                          <span className="text-slate-400">Waste Cost</span>
-                          <span className="font-semibold text-slate-200">Rp {result.wasteCost.toLocaleString('id-ID')}</span>
-                        </div>
-                      )}
-                      {result.cost25d > 0 && (
-                        <div className="flex justify-between py-2">
-                          <span className="text-slate-400">2.5D Print</span>
-                          <span className="font-semibold text-slate-200">Rp {result.cost25d.toLocaleString('id-ID')}</span>
-                        </div>
-                      )}
-                      {result.costDesign > 0 && (
-                        <div className="flex justify-between py-2">
-                          <span className="text-slate-400">Design Service</span>
-                          <span className="font-semibold text-slate-200">Rp {result.costDesign.toLocaleString('id-ID')}</span>
-                        </div>
-                      )}
-                      {result.costEnhance > 0 && (
-                        <div className="flex justify-between py-2">
-                          <span className="text-slate-400">Image Enhancement</span>
-                          <span className="font-semibold text-slate-200">Rp {result.costEnhance.toLocaleString('id-ID')}</span>
-                        </div>
-                      )}
-                      {result.costShutterstock > 0 && (
-                        <div className="flex justify-between py-2">
-                          <span className="text-slate-400">Shutterstock</span>
-                          <span className="font-semibold text-slate-200">Rp {result.costShutterstock.toLocaleString('id-ID')}</span>
-                        </div>
-                      )}
-                      {result.costInstallation > 0 && (
-                        <div className="flex justify-between py-2">
-                          <span className="text-slate-400">Installation</span>
-                          <span className="font-semibold text-slate-200">Rp {result.costInstallation.toLocaleString('id-ID')}</span>
+                        <div className="flex justify-between py-2 pl-4 border-l-2 border-orange-500/30">
+                          <span className="text-orange-400">Waste Cost</span>
+                          <div className="text-right">
+                            <p className="text-orange-400">Rp {result.wasteCost.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-orange-400/70">{result.volumeWaste.toFixed(2)} m² × Rp 60.000/m²</p>
+                          </div>
                         </div>
                       )}
                       
-                      <div className="border-t border-slate-700 pt-3 mt-3">
-                        <div className="flex justify-between items-center">
-                          <span className="text-lg font-bold text-white">Total</span>
-                          <span className="text-3xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-                            Rp {result.totalCost.toLocaleString('id-ID')}
-                          </span>
+                      {result.cost25d > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">2.5D Print</span>
+                          <div className="text-right">
+                            <p className="text-slate-200">Rp {result.cost25d.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-slate-500">{result.volumePrint.toFixed(2)} m² × Rp 500.000/m²</p>
+                          </div>
                         </div>
+                      )}
+                      
+                      {result.costDesign > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Design Service</span>
+                          <span className="text-slate-200">Rp {result.costDesign.toLocaleString('id-ID')}</span>
+                        </div>
+                      )}
+                      
+                      {result.costEnhance > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Image Enhancement</span>
+                          <span className="text-slate-200">Rp {result.costEnhance.toLocaleString('id-ID')}</span>
+                        </div>
+                      )}
+                      
+                      {result.costShutterstock > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Shutterstock</span>
+                          <div className="text-right">
+                            <p className="text-slate-200">Rp {result.costShutterstock.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-slate-500">{shutterstockQty} images × Rp 80.000</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {result.costInstallation > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Installation</span>
+                          <div className="text-right">
+                            <p className="text-slate-200">Rp {result.costInstallation.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-slate-500">{result.volumePrint.toFixed(2)} m² × Rp 100.000/m²</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Total */}
+                  <div className="bg-gradient-to-r from-indigo-600/20 to-purple-600/20 rounded-xl border border-indigo-500/20 p-6">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm text-slate-400 mb-1">Total Cost</p>
+                        <p className="text-xs text-slate-500">Including all services and materials</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-3xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
+                          Rp {result.totalCost.toLocaleString('id-ID')}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -831,13 +1045,13 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center h-96 text-center">
-                  <div className="w-24 h-24 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700">
-                    <svg className="w-12 h-12 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700">
+                    <svg className="w-10 h-10 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 7h6m0 3.666V14m-6.118 4.134l.789.789a2 2 0 002.828 0l4.243-4.243a2 2 0 000-2.828l-.789-.789M6.343 17.657l4.243-4.243" />
                     </svg>
                   </div>
                   <p className="text-slate-400 font-medium">Enter wall dimensions and click calculate</p>
-                  <p className="text-slate-600 text-sm mt-1">Results will appear here</p>
+                  <p className="text-slate-600 text-sm mt-1">Detailed results will appear here</p>
                 </div>
               )}
             </div>
