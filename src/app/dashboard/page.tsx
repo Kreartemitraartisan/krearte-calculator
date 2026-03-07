@@ -121,7 +121,7 @@ export default function Dashboard() {
 
     // 2. Get selected material
     const material = materials.find(m => m.id === selectedMaterialId);
-
+    
     // 3. Get customer material (for Reseller B)
     const customerMaterial = materialType === 'customer' && selectedCustomerMaterialId
       ? customerMaterials.find(m => m.id === selectedCustomerMaterialId)
@@ -908,29 +908,50 @@ export default function Dashboard() {
                   <div>
                     <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Wall Dimensions</h3>
                     <div className="space-y-2">
-                      {walls.filter(w => parseFloat(w.width) > 0 && parseFloat(w.height) > 0).map((wall, idx) => (
-                        <div key={wall.id} className="flex justify-between text-sm py-2 px-3 bg-slate-800/30 rounded-lg">
-                          <span className="text-slate-400">Wall {idx + 1}</span>
-                          <span className="text-slate-200">
-                            {wall.width} cm × {wall.height} cm = {((parseFloat(wall.width) / 100) * (parseFloat(wall.height) / 100)).toFixed(2)} m²
-                          </span>
-                        </div>
-                      ))}
+                      {walls.filter(w => parseFloat(w.width) > 0 && parseFloat(w.height) > 0).map((wall, idx) => {
+                        const widthCm = parseFloat(wall.width);
+                        const heightCm = parseFloat(wall.height);
+                        const widthWithBleed = widthCm + (bleedWidth * 2);
+                        const heightWithBleed = heightCm + (bleedHeight * 2);
+                        const areaPrint = (widthWithBleed / 100) * (heightWithBleed / 100);
+                        
+                        return (
+                          <div key={wall.id} className="space-y-1 py-2 px-3 bg-slate-800/30 rounded-lg">
+                            <div className="flex justify-between text-sm">
+                              <span className="text-slate-400">Wall {idx + 1}</span>
+                              <span className="text-slate-200 font-medium">
+                                {widthCm} cm × {heightCm} cm
+                              </span>
+                            </div>
+                            <div className="flex justify-between text-sm pl-4 border-l-2 border-indigo-500/30">
+                              <span className="text-indigo-400 text-xs">With bleed (+{bleedWidth * 2}cm × +{bleedHeight * 2}cm)</span>
+                              <span className="text-indigo-400 font-medium text-xs">
+                                {widthWithBleed} cm × {heightWithBleed} cm = {areaPrint.toFixed(2)} m²
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* Bleed Settings */}
+                  {/* Bleed Settings Info */}
                   <div className="pb-4 border-b border-slate-800">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-slate-400">Bleed Width</span>
-                      <span className="text-slate-200">{bleedWidth} cm (kanan kiri) = {bleedWidth * 2} cm </span>
+                    <h3 className="text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">Bleed Applied (Per Wall)</h3>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="flex justify-between py-2 px-3 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+                        <span className="text-slate-400">Bleed Width</span>
+                        <span className="text-indigo-400 font-medium">{bleedWidth} cm × 2 sisi = {bleedWidth * 2} cm</span>
+                      </div>
+                      <div className="flex justify-between py-2 px-3 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+                        <span className="text-slate-400">Bleed Height</span>
+                        <span className="text-indigo-400 font-medium">{bleedHeight} cm × 2 sisi = {bleedHeight * 2} cm</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between text-sm mt-1">
-                      <span className="text-slate-400">Bleed Height</span>
-                      <span className="text-slate-200">{bleedHeight} cm (atas bawah) = {bleedHeight * 2} cm </span>
-                    </div>
+                    <p className="text-xs text-slate-500 mt-2">
+                      * Setiap wall mendapat tambahan bleed {bleedWidth * 2}cm (lebar) × {bleedHeight * 2}cm (tinggi)
+                    </p>
                   </div>
-
                   {/* Area Calculations */}
                   <div>
                     <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Area Calculations</h3>
@@ -971,7 +992,9 @@ export default function Dashboard() {
                           <span className="text-orange-400">Waste Cost</span>
                           <div className="text-right">
                             <p className="text-orange-400">Rp {result.wasteCost.toLocaleString('id-ID')}</p>
-                            <p className="text-xs text-orange-400/70">{result.volumeWaste.toFixed(2)} m² × Rp 60.000/m²</p>
+                            <p className="text-xs text-orange-400/70">
+                              {result.volumeWaste.toFixed(2)} m² × Rp {result.wastePrice?.toLocaleString('id-ID')}/m²
+                            </p>
                           </div>
                         </div>
                       )}

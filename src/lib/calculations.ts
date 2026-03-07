@@ -44,7 +44,7 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     }
     
     wastePricePerM2 = material.waste_price;
-    
+
     walls.forEach(wall => {
       const printWidth = wall.width + (bleedWidth * 2);
       const printHeight = wall.height + (bleedHeight * 2);
@@ -119,6 +119,7 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     costShutterstock,
     costInstallation,
     totalCost,
+    wastePrice: wastePricePerM2,
     wasteInfo: materialType === 'customer' ? `Waste ${volumeWaste.toFixed(2)}m² (Tidak ditagih)` : undefined
   };
 };

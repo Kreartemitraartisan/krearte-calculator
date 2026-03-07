@@ -40,6 +40,7 @@ export interface CalculationResult {
   costInstallation: number;
   totalCost: number;
   wasteInfo?: string;
-  bleedWidth?: number;  // optional, untuk display
-  bleedHeight?: number; // optional, untuk display
+  wastePrice?: number;
+  bleedWidth?: number;
+  bleedHeight?: number;
 }
