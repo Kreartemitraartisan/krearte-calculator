@@ -85,7 +85,9 @@ export interface CalcParams {
   priceType: 'retail' | 'designer' | 'reseller' | 'reseller_partner';
   bleedWidth: number;
   bleedHeight: number;
-  printServiceId?: number;  // ✅ Untuk Reseller Partner
+  printServiceId?: number;
+  selectedWidth?: number | null;
+  printServicePrice?: number;
   addons: {
     is25d: boolean;
     designServicePrice: number;

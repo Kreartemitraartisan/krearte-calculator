@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase, UserProfile } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { Material, CustomerMaterial, CalculationResult } from '@/types';
+import { Material, CustomerMaterial, CalculationResult, PrintServicePrice } from '@/types';
 import { calculatePrice, calculateInstallationCost } from '@/lib/calculations';
 
 interface WallInput {
@@ -253,9 +253,11 @@ export default function Dashboard() {
       materialType: 'krearte' | 'customer';
       materialId: number | null;
       customerMaterialId: number | null;
-      priceType: 'retail' | 'designer' | 'reseller';
-      bleedWidth: number; // dalam cm
-      bleedHeight: number; // dalam cm
+      priceType: 'retail' | 'designer' | 'reseller' | 'reseller_partner';
+      printServiceId: number | null;
+      bleedWidth: number;
+      bleedHeight: number;
+      selectedWidth: number | null;
       addons: {
         is25d: boolean;
         designService: number;
@@ -264,21 +266,17 @@ export default function Dashboard() {
         installation: boolean;
         installationCity: string;
         installationType: 'normal' | 'panel' | 'void';
-        includeSample?: boolean;
-        sampleQty?: number;
+        includeSample: boolean;
+        sampleQty: number;
       };
     }
   ) => {
     if (!user) return;
 
-    // Convert cm to meters untuk database
-    const bleedWidthM = metadata.bleedWidth / 100;
-    const bleedHeightM = metadata.bleedHeight / 100;
-
     const roomData = {
-      walls: metadata.walls, // dalam cm (akan disimpan sebagai cm)
-      bleedWidth: bleedWidthM, // dalam meter
-      bleedHeight: bleedHeightM // dalam meter
+      walls: metadata.walls,
+      bleedWidth: metadata.bleedWidth / 100,
+      bleedHeight: metadata.bleedHeight / 100
     };
 
     // Hitung design service cost (custom atau fixed)
@@ -286,34 +284,53 @@ export default function Dashboard() {
       ? parseInt(designServiceCustom || '0')
       : metadata.addons.designService;
 
-    const { error } = await supabase
+    // ✅ Siapkan data insert (SATU tempat saja)
+    const insertData = {
+      user_id: user.id,
+      project_name: metadata.projectName || null,
+      room_data: roomData,
+      material_type: metadata.materialType,
+      material_id: metadata.materialId,
+      customer_material_id: metadata.customerMaterialId,
+      price_type: metadata.priceType,
+      print_service_id: metadata.printServiceId,
+      bleed_width: metadata.bleedWidth,
+      bleed_height: metadata.bleedHeight,
+      volume_print: result.volumePrint,
+      volume_bahan: result.volumeBahan,
+      volume_waste: result.volumeWaste,
+      num_panels: result.numPanels,
+      material_cost: result.materialCost,
+      waste_cost: result.wasteCost,
+      cost_25d: result.cost25d,
+      cost_design_service: designServiceCost,
+      cost_image_enhance: metadata.addons.imageEnhance ? 100000 : 0,
+      cost_shutterstock: metadata.addons.shutterstockQty * 80000,
+      cost_sample: result.costSample || 0,
+      cost_installation: result.costInstallation || 0,
+      cost_print_service: result.costPrintService || 0,
+      total_cost: result.totalCost
+    };
+
+    console.log('=== SAVE TO HISTORY DEBUG ===');
+    console.log('Insert Data:', insertData);
+
+    // ✅ SATU insert saja
+    const { data, error } = await supabase
       .from('calculations')
-      .insert({
-        user_id: user.id,
-        project_name: metadata.projectName || null,
-        room_data: roomData,
-        material_type: metadata.materialType,
-        material_id: metadata.materialId,
-        customer_material_id: metadata.customerMaterialId,
-        price_type: metadata.priceType,
-        volume_print: result.volumePrint,
-        volume_bahan: result.volumeBahan,
-        volume_waste: result.volumeWaste,
-        num_panels: result.numPanels,
-        material_cost: result.materialCost,
-        waste_cost: result.wasteCost,
-        cost_25d: result.cost25d,
-        cost_design_service: designServiceCost,
-        cost_image_enhance: metadata.addons.imageEnhance ? 50000 : 0,
-        cost_shutterstock: metadata.addons.shutterstockQty * 80000,
-        cost_sample: result.costSample,
-        cost_installation: result.costInstallation,
-        total_cost: result.totalCost
-      });
+      .insert(insertData)
+      .select();
 
     if (error) {
-      console.error('Failed to save to history:', error);
-      // Jangan tampilkan error ke user, karena kalkulasi tetap berhasil
+      console.error('❌ Supabase Error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+    } else {
+      console.log('✅ Successfully saved:', data);
     }
   };
 
