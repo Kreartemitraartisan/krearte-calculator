@@ -1,11 +1,11 @@
 export interface InstallationRate {
   normal: number;        // Bidang normal
   panel: number;         // Bidang panel
-  embossed: number;      // Printing timbul
+  embossed: number;      // Printing timbul / 2.5D effect
   void: number;          // Bidang void (tinggi > 3.7m)
-  minChargeArea: number; // Minimum charge area
-  minCharge: number;     // Minimum charge amount
-  maxNormalHeight: number; // Max height untuk harga normal
+  minChargeArea: number; // Minimum charge area (m²)
+  minCharge: number;     // Minimum charge amount (Rp)
+  maxNormalHeight: number; // Max height untuk harga normal (m)
 }
 
 export const installationRates: Record<string, InstallationRate> = {
@@ -13,7 +13,7 @@ export const installationRates: Record<string, InstallationRate> = {
     normal: 50000,
     panel: 55000,
     embossed: 55000,
-    void: 0, // DOUBLE dari normal
+    void: 0, // Will be calculated as normal * 2
     minChargeArea: 8,
     minCharge: 300000,
     maxNormalHeight: 3.7
@@ -41,39 +41,48 @@ export const installationRates: Record<string, InstallationRate> = {
     panel: 70000,
     embossed: 70000,
     void: 0,
-    minChargeArea: 0, // Tidak ada info
+    minChargeArea: 0,
     minCharge: 0,
     maxNormalHeight: 3.5
   }
 };
 
+/**
+ * Calculate installation cost based on area, city, wall height, and installation type
+ * @param area - Print area in m²
+ * @param city - Installation city (SURABAYA, JAKARTA, BANDUNG, LUAR_SURABAYA)
+ * @param installationType - Type of installation: 'normal' | 'panel' | 'void'
+ * @param wallHeight - Wall height in meters (for void detection)
+ * @returns Total installation cost in Rupiah
+ */
 export const calculateInstallationCost = (
   area: number,
   city: string,
-  wallHeight: number,
-  isPanel: boolean = false,
-  isEmbossed: boolean = false
+  installationType: 'normal' | 'panel' | 'void',  // ✅ Hanya 3 tipe
+  wallHeight: number
 ): number => {
-  const rate = installationRates[city];
+  const rate = installationRates[city.toUpperCase()];
   if (!rate) return 0;
 
   let pricePerM2 = rate.normal;
 
-  // Cek tinggi untuk void
-  if (wallHeight > rate.maxNormalHeight) {
-    pricePerM2 = rate.normal * 2; // DOUBLE
-  } else if (isPanel) {
+  // Determine price based on installation type
+  if (installationType === 'void' || wallHeight > rate.maxNormalHeight) {
+    // Void: double the normal rate for height > maxNormalHeight
+    pricePerM2 = rate.normal * 2;
+  } else if (installationType === 'panel') {
     pricePerM2 = rate.panel;
-  } else if (isEmbossed) {
-    pricePerM2 = rate.embossed;
   }
-
+  // ✅ HAPUS check untuk 'embossed' karena itu print service, bukan installation
+  
   let totalCost = area * pricePerM2;
 
-  // Apply minimum charge
+  // Apply minimum charge if area is below threshold
   if (rate.minChargeArea > 0 && area < rate.minChargeArea) {
     totalCost = Math.max(totalCost, rate.minCharge);
   }
 
   return totalCost;
 };
+
+export default calculateInstallationCost;
