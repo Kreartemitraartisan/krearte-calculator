@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase, UserProfile } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { Material, CustomerMaterial, CalculationResult } from '@/types';
@@ -26,8 +26,7 @@ export default function Dashboard() {
   const router = useRouter();
 
   // State untuk price type - hanya bisa diubah oleh admin
-  const [priceType, setPriceType] = useState<'retail' | 'designer' | 'reseller'>('designer');
-  
+  const [priceType, setPriceType] = useState<'retail' | 'designer' | 'reseller' | 'reseller_partner'>('designer');
   // State Kalkulator
   const [walls, setWalls] = useState<WallInput[]>([{ id: Date.now(), width: '', height: '' }]);
   const [materialType, setMaterialType] = useState<'krearte' | 'customer'>('krearte');
@@ -35,6 +34,10 @@ export default function Dashboard() {
   const [selectedCustomerMaterialId, setSelectedCustomerMaterialId] = useState<number | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [customerMaterials, setCustomerMaterials] = useState<CustomerMaterial[]>([]);
+  const [printServices, setPrintServices] = useState<PrintServicePrice[]>([]);
+  const [selectedPrintServiceId, setSelectedPrintServiceId] = useState<number | null>(null);
+  const [selectedPrintWidth, setSelectedPrintWidth] = useState<number | null>(null);
+  const [selectedWidth, setSelectedWidth] = useState<number | null>(null);
   
   // State untuk bleed/lebihan area (dalam cm)
   const [bleedWidth, setBleedWidth] = useState<number>(3);
@@ -50,7 +53,20 @@ export default function Dashboard() {
   const [installation, setInstallation] = useState(false);
   const [installationCity, setInstallationCity] = useState<string>('SURABAYA');
   const [installationType, setInstallationType] = useState<'normal' | 'panel' | 'void'>('normal');
-  
+  const [includeSample, setIncludeSample] = useState<boolean>(false);
+  const [sampleQty, setSampleQty] = useState<number>(0);
+  const selectedMaterial = useMemo(() => {
+    return materials.find(m => m.id === selectedMaterialId);
+  }, [materials, selectedMaterialId]);
+  const fetchPrintServices = async () => {
+    const { data: services } = await supabase
+      .from('print_service_prices')
+      .select('*')
+      .eq('category', 'print')
+      .eq('is_active', true);
+    if (services) setPrintServices(services);
+  };
+
   // Result
   const [result, setResult] = useState<CalculationResult | null>(null);
   const [projectName, setProjectName] = useState('');
@@ -73,16 +89,17 @@ export default function Dashboard() {
       if (profile) {
         setUser(profile);
         
-        // Set default price type berdasarkan role
         if (profile.role === 'designer') {
           setPriceType('designer');
         } else if (profile.role === 'reseller') {
           setPriceType('reseller');
+        } else if (profile.role === 'reseller_partner') {
+          setPriceType('reseller_partner');
         } else {
-          setPriceType('designer'); // Admin default
+          setPriceType('designer');
         }
         
-        fetchMaterials();
+        await Promise.all([fetchMaterials(), fetchPrintServices()]);
       }
       setLoading(false);
     };
@@ -119,43 +136,48 @@ export default function Dashboard() {
       return;
     }
 
-    // 2. Get selected material
+    // 2. Get selected material (Krearte)
     const material = materials.find(m => m.id === selectedMaterialId);
     
-    // 3. Get customer material (for Reseller B)
+    // 3. Get customer material (Reseller B)
     const customerMaterial = materialType === 'customer' && selectedCustomerMaterialId
       ? customerMaterials.find(m => m.id === selectedCustomerMaterialId)
       : undefined;
 
-    // 4. Convert bleed from cm to meters
+    // 4. Get print service price (khusus Reseller Partner)
+    const selectedPrintService = printServices.find(s => s.id === selectedPrintServiceId);
+    const printServiceRate = selectedPrintService?.price_per_m2 || 0;
+
+    // 5. Convert bleed from cm to meters (per side, total = ×2 di calculations)
     const bleedWidthM = bleedWidth / 100;
     const bleedHeightM = bleedHeight / 100;
 
-    // 🔍 DEBUG: Log bleed values
-    console.log('=== BLEED DEBUG ===');
-    console.log('bleedWidth (cm):', bleedWidth);
-    console.log('bleedHeight (cm):', bleedHeight);
-    console.log('bleedWidthM (m):', bleedWidthM);
-    console.log('bleedHeightM (m):', bleedHeightM);
-    console.log('Wall dimensions (m):', validWalls);
-    console.log('===================');
+    // 🔍 DEBUG: Log values untuk troubleshooting
+    console.log('=== CALCULATION DEBUG ===');
+    console.log('Price Type:', priceType);
+    console.log('Material Type:', materialType);
+    console.log('Bleed (m):', bleedWidthM, '×', bleedHeightM);
+    console.log('Valid Walls (m):', validWalls);
+    console.log('Print Service Rate:', printServiceRate);
+    console.log('Selected Print Width:', priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth);
+    console.log('=========================');
 
-    // 5. Determine role for calculation (admin can override)
-    const calculationRole = user.role === 'admin'
-      ? (priceType === 'retail' ? 'reseller' : priceType)
-      : user.role;
+    // 6. Determine role for calculation (admin can override via priceType)
+    const calculationRole = user.role === 'admin' ? priceType : user.role;
 
     try {
-      // 6. Call calculatePrice
+      // 7. Call calculatePrice dengan ALL params
       const res = calculatePrice({
         walls: validWalls,
         materialType,
         material,
         customerMaterial,
-        role: calculationRole as 'designer' | 'reseller',
+        role: calculationRole as 'designer' | 'reseller' | 'reseller_partner',
         priceType,
         bleedWidth: bleedWidthM,
         bleedHeight: bleedHeightM,
+        selectedWidth: priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth, // ✅ Width untuk kalkulasi panels
+        printServicePrice: priceType === 'reseller_partner' ? printServiceRate : undefined,
         addons: {
           is25d,
           designServicePrice: isDesignCustom
@@ -166,26 +188,41 @@ export default function Dashboard() {
           installation,
           installationCity,
           installationType,
+          includeSample,
+          sampleQty,
+          samplePrice: material?.sample_price || 0,
           wallHeight: validWalls.length > 0
             ? validWalls.reduce((sum, w) => sum + w.height, 0) / validWalls.length
             : 0
         }
       });
 
-      // 7. Set result
+      // 8. Set result to state
       setResult(res);
 
-      // 8. Save to History
+      // 🔍 Debug result
+      console.log('=== CALCULATION RESULT ===');
+      console.log('Print Area:', res.volumePrint.toFixed(2), 'm²');
+      console.log('Material Needed:', res.volumeBahan.toFixed(2), 'm²');
+      console.log('Waste:', res.volumeWaste.toFixed(2), 'm²');
+      console.log('Panels:', res.numPanels);
+      console.log('Print Service Cost:', res.costPrintService);
+      console.log('Total Cost:', res.totalCost);
+      console.log('=========================');
+
+      // 9. Save to History (Supabase)
       saveToHistory(res, {
         projectName,
         walls: walls.map(w => ({
-          width: parseFloat(w.width), // simpan dalam cm
-          height: parseFloat(w.height) // simpan dalam cm
+          width: parseFloat(w.width), // simpan dalam cm untuk history
+          height: parseFloat(w.height)
         })).filter(w => w.width > 0 && w.height > 0),
         materialType,
         materialId: materialType === 'krearte' ? selectedMaterialId : null,
         customerMaterialId: materialType === 'customer' ? selectedCustomerMaterialId : null,
         priceType,
+        printServiceId: priceType === 'reseller_partner' ? selectedPrintServiceId : null,
+        selectedWidth: priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth,
         bleedWidth,
         bleedHeight,
         addons: {
@@ -195,7 +232,9 @@ export default function Dashboard() {
           shutterstockQty,
           installation,
           installationCity,
-          installationType
+          installationType,
+          includeSample,
+          sampleQty
         }
       });
 
@@ -225,6 +264,8 @@ export default function Dashboard() {
         installation: boolean;
         installationCity: string;
         installationType: 'normal' | 'panel' | 'void';
+        includeSample?: boolean;
+        sampleQty?: number;
       };
     }
   ) => {
@@ -265,6 +306,7 @@ export default function Dashboard() {
         cost_design_service: designServiceCost,
         cost_image_enhance: metadata.addons.imageEnhance ? 50000 : 0,
         cost_shutterstock: metadata.addons.shutterstockQty * 80000,
+        cost_sample: result.costSample,
         cost_installation: result.costInstallation,
         total_cost: result.totalCost
       });
@@ -611,7 +653,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Material Selection */}
+            {/* Material Selection
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-white">Material Source</h2>
@@ -692,7 +734,156 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+            </div> */}
+
+            {/* Material Selection */}
+            <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-white">Material Source</h2>
+                <span className="text-xs text-slate-400">
+                  Using: <span className="text-indigo-400 font-semibold capitalize">{priceType}</span> pricing
+                </span>
+              </div>
+              
+              <div className="flex gap-4 mb-4">
+                <button
+                  onClick={() => setMaterialType('krearte')}
+                  className={`flex-1 px-4 py-3 rounded-xl font-medium transition ${
+                    materialType === 'krearte' 
+                      ? 'bg-indigo-600 text-white' 
+                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-1">
+                    <span>Krearte Material</span>
+                    <span className="text-xs opacity-75">(Reseller A)</span>
+                  </div>
+                </button>
+                {(user.role === 'reseller' || user.role === 'admin' || user.role === 'reseller_partner') && (
+                  <button
+                    onClick={() => setMaterialType('customer')}
+                    className={`flex-1 px-4 py-3 rounded-xl font-medium transition ${
+                      materialType === 'customer' 
+                        ? 'bg-indigo-600 text-white' 
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                    }`}
+                  >
+                    <div className="flex flex-col items-center gap-1">
+                      <span>Customer Material</span>
+                      <span className="text-xs opacity-75">(Reseller B)</span>
+                    </div>
+                  </button>
+                )}
+              </div>
+
+              {materialType === 'krearte' ? (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Select Material
+                    </label>
+                    <select 
+                      onChange={(e) => setSelectedMaterialId(Number(e.target.value))} 
+                      value={selectedMaterialId || ''}
+                      className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    >
+                      <option value="">Choose material...</option>
+                      {materials.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} - {m.type}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ) : materialType === 'customer' && priceType === 'reseller_partner' ? (
+                // ✅ Khusus Reseller Partner - Pilih Print Service
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Select Print Service Type
+                    </label>
+                    <select 
+                      onChange={(e) => setSelectedPrintServiceId(Number(e.target.value))} 
+                      value={selectedPrintServiceId || ''}
+                      className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    >
+                      <option value="">Choose print service...</option>
+                      {printServices.map(service => (
+                        <option key={service.id} value={service.id}>
+                          {service.service_name} - Rp {service.price_per_m2.toLocaleString('id-ID')}/m²
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  {selectedPrintServiceId && (
+                    <div className="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
+                      <p className="text-sm text-indigo-300">
+                        <span className="font-semibold">Print Service:</span>{' '}
+                        {printServices.find(s => s.id === selectedPrintServiceId)?.service_name}
+                      </p>
+                      <p className="text-sm text-indigo-300 mt-1">
+                        <span className="font-semibold">Price:</span> Rp {' '}
+                        {printServices.find(s => s.id === selectedPrintServiceId)?.price_per_m2.toLocaleString('id-ID')}/m²
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                // Customer Material biasa (bukan Partner)
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Select Print Service
+                    </label>
+                    <select 
+                      onChange={(e) => setSelectedCustomerMaterialId(Number(e.target.value))} 
+                      value={selectedCustomerMaterialId || ''}
+                      className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    >
+                      <option value="">Choose service...</option>
+                      {customerMaterials.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.category === 'standard' ? 'Standard' : 'Karpet/Blind'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
+            {/* Width Selection - Khusus Reseller Partner */}
+            {priceType === 'reseller_partner' && selectedPrintServiceId && (
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Select Material Width
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  {printServices
+                    .find(s => s.id === selectedPrintServiceId)
+                    ?.width_options?.map((option, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setSelectedPrintWidth(option.width)}
+                        className={`px-4 py-3 rounded-xl font-medium transition ${
+                          selectedPrintWidth === option.width
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                </div>
+                {selectedPrintWidth && (
+                  <p className="text-xs text-indigo-400 mt-2">
+                    Selected width: {(selectedPrintWidth * 100).toFixed(0)}cm ({selectedPrintWidth.toFixed(2)}m)
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Add-ons */}
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
@@ -738,6 +929,51 @@ export default function Dashboard() {
                     className="w-20 px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white text-center"
                   />
                 </div>
+
+                {/* Sample Add-on */}
+                <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
+                  <div>
+                    <p className="font-medium text-slate-200">Sample Material</p>
+                    <p className="text-sm text-slate-500">Physical sample for preview</p>
+                  </div>
+                  <input 
+                    type="checkbox" 
+                    checked={includeSample} 
+                    onChange={(e) => {
+                      setIncludeSample(e.target.checked);
+                      if (!e.target.checked) setSampleQty(0);
+                    }}
+                    className="w-5 h-5 text-indigo-600 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
+                  />
+                </label>
+
+                {includeSample && selectedMaterial && (
+                  <div className="p-4 border border-slate-700 rounded-xl bg-slate-800/30 space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-2">
+                        Number of Samples
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={sampleQty}
+                        onChange={(e) => setSampleQty(Math.max(1, Math.min(10, Number(e.target.value))))}
+                        className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <p className="text-xs text-slate-500 mt-1">Max 10 samples</p>
+                    </div>
+
+                    <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
+                      <p className="text-sm text-indigo-300">
+                        <span className="font-semibold">Price per sample:</span> Rp {selectedMaterial.sample_price?.toLocaleString('id-ID') || 0}
+                      </p>
+                      <p className="text-sm text-indigo-300 mt-1">
+                        <span className="font-semibold">Total:</span> Rp {(sampleQty * (selectedMaterial.sample_price || 0)).toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="p-4 border border-slate-700 rounded-xl">
                   <p className="font-medium text-slate-200 mb-2">Design Service</p>
@@ -1029,6 +1265,18 @@ export default function Dashboard() {
                           <div className="text-right">
                             <p className="text-slate-200">Rp {result.costShutterstock.toLocaleString('id-ID')}</p>
                             <p className="text-xs text-slate-500">{shutterstockQty} images × Rp 80.000</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {result.costSample > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Sample Material</span>
+                          <div className="text-right">
+                            <p className="text-slate-200">Rp {result.costSample.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-slate-500">
+                              {sampleQty} sample(s) × Rp {selectedMaterial?.sample_price?.toLocaleString('id-ID')}
+                            </p>
                           </div>
                         </div>
                       )}
