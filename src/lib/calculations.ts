@@ -122,7 +122,7 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     : 0;
 
   // Material cost (hanya untuk Krearte material - Retail, Designer, Reseller A)
-  const materialCost = materialType === 'krearte' ? volumeBahan * pricePerM2 : 0;
+  const materialCost = materialType === 'krearte' ? volumePrint * pricePerM2 : 0;
   
   // Waste cost (hanya untuk Krearte material)
   const wasteCost = materialType === 'krearte' ? volumeWaste * wastePricePerM2 : 0;
