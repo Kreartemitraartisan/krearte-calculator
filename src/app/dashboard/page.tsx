@@ -910,7 +910,13 @@ export default function Dashboard() {
                 <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
                   <div>
                     <p className="font-medium text-slate-200">2.5D Print</p>
-                    <p className="text-sm text-slate-500">Embossed effect (+Rp 500,000/m²)</p>
+                    <p className="text-sm text-slate-500">
+                      Embossed effect (+Rp {
+                        priceType === 'retail' ? '625.000' :
+                        priceType === 'reseller_partner' ? '350.000' :
+                        '500.000'
+                      }/m²)
+                    </p>
                   </div>
                   <input 
                     type="checkbox" 
@@ -1257,7 +1263,13 @@ export default function Dashboard() {
                           <span className="text-slate-400">2.5D Print</span>
                           <div className="text-right">
                             <p className="text-slate-200">Rp {result.cost25d.toLocaleString('id-ID')}</p>
-                            <p className="text-xs text-slate-500">{result.volumePrint.toFixed(2)} m² × Rp 500.000/m²</p>
+                            <p className="text-xs text-slate-500">
+                              {result.volumePrint.toFixed(2)} m² × Rp {
+                                priceType === 'retail' ? '625.000' :
+                                priceType === 'reseller_partner' ? '350.000' :
+                                '500.000'
+                              }/m²
+                            </p>
                           </div>
                         </div>
                       )}

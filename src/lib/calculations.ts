@@ -1,6 +1,15 @@
-// src/lib/calculations.ts
 import { CalculationResult, Material, CustomerMaterial, CalcParams } from '@/types';
 import { calculateInstallationCost } from './installation';
+
+const get25DPrice = (priceType: string): number => {
+  switch (priceType) {
+    case 'retail': return 625000;
+    case 'designer': return 500000;
+    case 'reseller': return 500000;
+    case 'reseller_partner': return 350000;
+    default: return 350000;
+  }
+};
 
 export const calculatePrice = (params: CalcParams): CalculationResult => {
   const { 
@@ -33,12 +42,11 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
       const printWidth = wall.width + (bleedWidth * 2);
       const printHeight = wall.height + (bleedHeight * 2);
       
-      // ✅ FIX: Hitung panels berdasarkan PRINT WIDTH (bukan wall width)
       const panels = Math.ceil(printWidth / materialWidth);
       
       const areaPrint = printWidth * printHeight;
       const areaBahan = panels * materialWidth * printHeight;
-      const waste = areaBahan - areaPrint;  // ✅ FIX: Langsung kurangi area
+      const waste = areaBahan - areaPrint;
       
       volumePrint += areaPrint;
       volumeBahan += areaBahan;
@@ -49,13 +57,11 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     pricePerM2 = printServiceRate || 0;
     wastePricePerM2 = 0;
   }
-
-  // ========== KREARTE MATERIAL (Reseller A) ==========
+  // ========== KREARTE MATERIAL (Retail, Designer, Reseller A) ==========
   else if (materialType === 'krearte' && material) {
-    // Tentukan width material yang dipakai
     materialWidth = selectedWidth || material.width_material;
     
-    // Harga berdasarkan priceType
+    // Harga material berdasarkan role
     if (priceType === 'retail') {
       pricePerM2 = material.price_retail || material.price_designer;
     } else if (priceType === 'designer') {
@@ -63,7 +69,6 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     } else if (priceType === 'reseller') {
       pricePerM2 = material.price_reseller;
     } else {
-      // Fallback untuk reseller_partner atau lainnya
       pricePerM2 = material.price_partner || material.price_reseller;
     }
     
@@ -73,12 +78,11 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
       const printWidth = wall.width + (bleedWidth * 2);
       const printHeight = wall.height + (bleedHeight * 2);
       
-      // Hitung panels berdasarkan width yang dipilih
-      const panels = Math.ceil(wall.width / materialWidth);
+      const panels = Math.ceil(printWidth / materialWidth);
       
       const areaPrint = printWidth * printHeight;
       const areaBahan = panels * materialWidth * printHeight;
-      const waste = ((panels * materialWidth) - printWidth) * printHeight;
+      const waste = areaBahan - areaPrint;
       
       volumePrint += areaPrint;
       volumeBahan += areaBahan;
@@ -88,7 +92,6 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
   } 
   // ========== CUSTOMER MATERIAL (Reseller B) ==========
   else if (materialType === 'customer' && customerMaterial) {
-    // Tentukan width material yang dipakai
     materialWidth = selectedWidth || customerMaterial.width;
     
     pricePerM2 = customerMaterial.price_print;
@@ -98,12 +101,11 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
       const printWidth = wall.width + (bleedWidth * 2);
       const printHeight = wall.height + (bleedHeight * 2);
       
-      // Hitung panels berdasarkan width yang dipilih
-      const panels = Math.ceil(wall.width / materialWidth);
+      const panels = Math.ceil(printWidth / materialWidth);
       
       const areaPrint = printWidth * printHeight;
       const areaBahan = panels * materialWidth * printHeight;
-      const waste = ((panels * materialWidth) - printWidth) * printHeight;
+      const waste = areaBahan - areaPrint;
       
       volumePrint += areaPrint;
       volumeBahan += areaBahan;
@@ -113,27 +115,28 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
   }
 
   // ========== KALKULASI BIAYA ==========
-  // Print service cost (khusus Reseller Partner)
-  const costPrintService = priceType === 'reseller_partner' && printServiceRate
+  
+  // Print service cost (hanya untuk Reseller Partner & Reseller B)
+  const costPrintService = (priceType === 'reseller_partner' || (materialType === 'customer' && priceType === 'reseller')) && printServiceRate
     ? volumePrint * printServiceRate
     : 0;
 
-  // Material cost (hanya untuk Krearte/Customer material, BUKAN untuk Reseller Partner)
-  const materialCost = priceType === 'reseller_partner' ? 0 : volumeBahan * pricePerM2;
+  // Material cost (hanya untuk Krearte material - Retail, Designer, Reseller A)
+  const materialCost = materialType === 'krearte' ? volumeBahan * pricePerM2 : 0;
   
   // Waste cost (hanya untuk Krearte material)
-  const wasteCost = materialType === 'krearte' && priceType !== 'reseller_partner' 
-    ? volumeWaste * wastePricePerM2 
-    : 0;
+  const wasteCost = materialType === 'krearte' ? volumeWaste * wastePricePerM2 : 0;
   
-  // Add-ons (prices from Goodrich PDF)
-  const cost25d = addons.is25d ? volumePrint * 350000 : 0; // 2.5D Print: Rp 350.000/m²
+  // ✅ 2.5D Print ADD-ON (harga berbeda per role - dari PDF Goodrich)
+  const cost25d = addons.is25d ? volumePrint * get25DPrice(priceType) : 0;
+  
+  // Add-ons lainnya
   const costDesign = addons.designServicePrice || 0;
-  const costEnhance = addons.imageEnhance ? 100000 : 0; // Enhanced Image: Rp 100.000
+  const costEnhance = addons.imageEnhance ? 100000 : 0;
   const costSample = (addons.includeSample && addons.sampleQty && addons.samplePrice)
     ? addons.sampleQty * addons.samplePrice
     : 0;
-  const costShutterstock = (addons.shutterstockQty || 0) * 80000; // Shutterstock: Rp 80.000/image
+  const costShutterstock = (addons.shutterstockQty || 0) * 80000;
   
   // Installation cost
   let costInstallation = 0;
@@ -148,7 +151,7 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
   }
 
   // Total cost
-  const totalCost = materialCost + wasteCost + cost25d + costDesign + costEnhance + costShutterstock + costInstallation + costSample + costPrintService;
+  const totalCost = materialCost + wasteCost + costPrintService + cost25d + costDesign + costEnhance + costShutterstock + costInstallation + costSample;
 
   return {
     volumePrint,
@@ -163,12 +166,14 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
     costShutterstock,
     costInstallation,
     costSample,
-    costPrintService,  // ✅ For Reseller Partner print service
+    costPrintService,
     totalCost,
     wastePrice: wastePricePerM2,
     wasteInfo: materialType === 'customer' && priceType !== 'reseller_partner' 
       ? `Waste ${volumeWaste.toFixed(2)}m² (Tidak ditagih)` 
-      : undefined
+      : priceType === 'reseller_partner'
+        ? `Waste ${volumeWaste.toFixed(2)}m² (Dihitung, tidak ditagih)`
+        : undefined
   };
 };
 
