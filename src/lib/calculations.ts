@@ -84,10 +84,21 @@ export const calculatePrice = (params: CalcParams): CalculationResult => {
       const areaBahan = panels * materialWidth * printHeight;
       const waste = areaBahan - areaPrint;
       
-      volumePrint += areaPrint;
-      volumeBahan += areaBahan;
-      volumeWaste += Math.max(0, waste);
+      volumePrint = Math.round((volumePrint + areaPrint) * 100) / 100;
+      volumeBahan = Math.round((volumeBahan + areaBahan) * 100) / 100;
+      volumeWaste = Math.round((volumeWaste + waste) * 100) / 100;
       numPanels += panels;
+      console.log('=== RETAIL PRICE DEBUG ===');
+      console.log('Price Type:', priceType);
+      console.log('Material Type:', materialType);
+      console.log('Material Name:', material?.name);
+      console.log('price_retail:', material?.price_retail);
+      console.log('price_designer:', material?.price_designer);
+      console.log('Final pricePerM2:', pricePerM2);
+      console.log('volumePrint (Print Area):', volumePrint);
+      console.log('volumeBahan (Material Needed):', volumeBahan);
+      console.log('Expected Material Cost:', volumePrint * pricePerM2);
+      console.log('==========================');
     });
   } 
   // ========== CUSTOMER MATERIAL (Reseller B) ==========

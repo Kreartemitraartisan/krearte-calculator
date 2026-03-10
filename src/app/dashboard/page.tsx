@@ -1238,13 +1238,28 @@ export default function Dashboard() {
                   <div className="pb-4 border-b border-slate-800">
                     <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Cost Breakdown</h3>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between py-2">
-                        <span className="text-slate-400">Material Cost</span>
-                        <div className="text-right">
-                          <p className="text-slate-200">Rp {result.materialCost.toLocaleString('id-ID')}</p>
-                          <p className="text-xs text-slate-500">{result.volumeBahan.toFixed(2)} m² × Rp {(result.materialCost / result.volumeBahan).toLocaleString('id-ID')}/m²</p>
+                      {/* Material Cost */}
+                      {result && result.materialCost > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Material Cost</span>
+                          <div className="text-right">
+                            <p className="text-slate-200">Rp {result.materialCost.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-slate-500">
+                              {result.volumePrint.toFixed(2)} m² × Rp {
+                                materialType === 'krearte' 
+                                  ? (
+                                      priceType === 'retail' 
+                                        ? selectedMaterial?.price_retail 
+                                        : priceType === 'designer' 
+                                          ? selectedMaterial?.price_designer 
+                                          : selectedMaterial?.price_reseller
+                                    )?.toLocaleString('id-ID')
+                                  : customerMaterials.find(m => m.id === selectedCustomerMaterialId)?.price_print.toLocaleString('id-ID')
+                              }/m²
+                            </p>
+                          </div>
                         </div>
-                      </div>
+                      )}
                       
                       {result.wasteCost > 0 && (
                         <div className="flex justify-between py-2 pl-4 border-l-2 border-orange-500/30">
