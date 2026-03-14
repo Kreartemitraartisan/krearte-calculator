@@ -1,10 +1,9 @@
 'use client';
-
 import { useEffect, useState, useMemo } from 'react';
 import { supabase, UserProfile } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { Material, CustomerMaterial, CalculationResult, PrintServicePrice } from '@/types';
-import { calculatePrice, calculateInstallationCost } from '@/lib/calculations';
+import { Material, CustomerMaterial, CalculationResult, PrintServicePrice, WidthOption } from '@/types';
+import { calculatePrice } from '@/lib/calculations';
 
 interface WallInput {
   id: number;
@@ -12,21 +11,14 @@ interface WallInput {
   height: string;
 }
 
-interface Addons {
-  is25d: boolean;
-  designServicePrice: number;
-  imageEnhance: boolean;
-  shutterstockQty: number;
-  installation: boolean;
-}
-
 export default function Dashboard() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  // State untuk price type - hanya bisa diubah oleh admin
+  // State untuk price type
   const [priceType, setPriceType] = useState<'retail' | 'designer' | 'reseller' | 'reseller_partner'>('designer');
+
   // State Kalkulator
   const [walls, setWalls] = useState<WallInput[]>([{ id: Date.now(), width: '', height: '' }]);
   const [materialType, setMaterialType] = useState<'krearte' | 'customer'>('krearte');
@@ -36,18 +28,20 @@ export default function Dashboard() {
   const [customerMaterials, setCustomerMaterials] = useState<CustomerMaterial[]>([]);
   const [printServices, setPrintServices] = useState<PrintServicePrice[]>([]);
   const [selectedPrintServiceId, setSelectedPrintServiceId] = useState<number | null>(null);
-  const [selectedPrintWidth, setSelectedPrintWidth] = useState<number | null>(null);
-  const [selectedWidth, setSelectedWidth] = useState<number | null>(null);
-  
+
+  // Width selection states
+  const [selectedPrintWidth, setSelectedPrintWidth] = useState<number | null>(null); // Untuk Reseller Partner
+  const [selectedWidth, setSelectedWidth] = useState<number | null>(null); // Untuk Krearte/Customer Material
+
   // State untuk bleed/lebihan area (dalam cm)
   const [bleedWidth, setBleedWidth] = useState<number>(3);
   const [bleedHeight, setBleedHeight] = useState<number>(3);
-  
+
   // Addons
   const [is25d, setIs25d] = useState(false);
   const [designService, setDesignService] = useState<number>(0);
-  const [designServiceCustom, setDesignServiceCustom] = useState<string>(''); // ✅ Tambahkan ini
-  const [isDesignCustom, setIsDesignCustom] = useState<boolean>(false); // ✅ Tambahkan ini
+  const [designServiceCustom, setDesignServiceCustom] = useState<string>('');
+  const [isDesignCustom, setIsDesignCustom] = useState<boolean>(false);
   const [imageEnhance, setImageEnhance] = useState(false);
   const [shutterstockQty, setShutterstockQty] = useState(0);
   const [installation, setInstallation] = useState(false);
@@ -55,9 +49,11 @@ export default function Dashboard() {
   const [installationType, setInstallationType] = useState<'normal' | 'panel' | 'void'>('normal');
   const [includeSample, setIncludeSample] = useState<boolean>(false);
   const [sampleQty, setSampleQty] = useState<number>(0);
+
   const selectedMaterial = useMemo(() => {
     return materials.find(m => m.id === selectedMaterialId);
   }, [materials, selectedMaterialId]);
+
   const fetchPrintServices = async () => {
     const { data: services } = await supabase
       .from('print_service_prices')
@@ -79,16 +75,16 @@ export default function Dashboard() {
         router.push('/login');
         return;
       }
-      
+
       const { data: profile } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', session.user.id)
         .single();
-        
+
       if (profile) {
         setUser(profile);
-        
+
         if (profile.role === 'designer') {
           setPriceType('designer');
         } else if (profile.role === 'reseller') {
@@ -96,9 +92,9 @@ export default function Dashboard() {
         } else if (profile.role === 'reseller_partner') {
           setPriceType('reseller_partner');
         } else {
-          setPriceType('designer');
+          setPriceType('retail');
         }
-        
+
         await Promise.all([fetchMaterials(), fetchPrintServices()]);
       }
       setLoading(false);
@@ -112,7 +108,7 @@ export default function Dashboard() {
       .select('*')
       .eq('is_active', true);
     if (mats) setMaterials(mats);
-    
+
     const { data: custMats } = await supabase
       .from('customer_materials')
       .select('*');
@@ -123,12 +119,12 @@ export default function Dashboard() {
     if (!user) return;
     setError('');
 
-    // 1. Filter & parse valid walls (input dalam CM, convert ke meter)
+    // 1. Filter & parse valid walls
     const validWalls = walls
       .filter(w => parseFloat(w.width) > 0 && parseFloat(w.height) > 0)
       .map(w => ({
-        width: parseFloat(w.width) / 100, // cm → meter
-        height: parseFloat(w.height) / 100 // cm → meter
+        width: parseFloat(w.width) / 100,
+        height: parseFloat(w.height) / 100
       }));
 
     if (validWalls.length === 0) {
@@ -136,37 +132,42 @@ export default function Dashboard() {
       return;
     }
 
-    // 2. Get selected material (Krearte)
+    // 2. Get selected material
     const material = materials.find(m => m.id === selectedMaterialId);
     
-    // 3. Get customer material (Reseller B)
+    // 3. Get customer material
     const customerMaterial = materialType === 'customer' && selectedCustomerMaterialId
       ? customerMaterials.find(m => m.id === selectedCustomerMaterialId)
       : undefined;
 
-    // 4. Get print service price (khusus Reseller Partner)
+    // 4. Get print service price
     const selectedPrintService = printServices.find(s => s.id === selectedPrintServiceId);
     const printServiceRate = selectedPrintService?.price_per_m2 || 0;
+    
+    // ✅ FIX: Tentukan rate yang benar
+    const customerMaterialRate = customerMaterial?.price_print || 0;
+    const finalRate = priceType === 'reseller_partner' 
+      ? printServiceRate 
+      : customerMaterialRate;
 
-    // 5. Convert bleed from cm to meters (per side, total = ×2 di calculations)
+    // 5. Convert bleed
     const bleedWidthM = bleedWidth / 100;
     const bleedHeightM = bleedHeight / 100;
 
-    // 🔍 DEBUG: Log values untuk troubleshooting
+    // Debug log
     console.log('=== CALCULATION DEBUG ===');
     console.log('Price Type:', priceType);
     console.log('Material Type:', materialType);
-    console.log('Bleed (m):', bleedWidthM, '×', bleedHeightM);
-    console.log('Valid Walls (m):', validWalls);
     console.log('Print Service Rate:', printServiceRate);
-    console.log('Selected Print Width:', priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth);
-    console.log('=========================');
+    console.log('Customer Material Rate:', customerMaterialRate);
+    console.log('Final Rate Used:', finalRate);
+    console.log('Selected Width:', priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth);
 
-    // 6. Determine role for calculation (admin can override via priceType)
+    // 6. Determine role
     const calculationRole = user.role === 'admin' ? priceType : user.role;
 
     try {
-      // 7. Call calculatePrice dengan ALL params
+      // 7. Call calculatePrice
       const res = calculatePrice({
         walls: validWalls,
         materialType,
@@ -176,13 +177,12 @@ export default function Dashboard() {
         priceType,
         bleedWidth: bleedWidthM,
         bleedHeight: bleedHeightM,
-        selectedWidth: priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth, // ✅ Width untuk kalkulasi panels
-        printServicePrice: priceType === 'reseller_partner' ? printServiceRate : undefined,
+        selectedWidth: priceType === 'reseller_partner' ? selectedPrintWidth : selectedWidth,
+        // ✅ FIX: Kirim rate yang benar
+        printServicePrice: finalRate,
         addons: {
           is25d,
-          designServicePrice: isDesignCustom
-            ? parseInt(designServiceCustom || '0')
-            : designService,
+          designServicePrice: isDesignCustom ? parseInt(designServiceCustom || '0') : designService,
           imageEnhance,
           shutterstockQty,
           installation,
@@ -197,24 +197,18 @@ export default function Dashboard() {
         }
       });
 
-      // 8. Set result to state
       setResult(res);
 
-      // 🔍 Debug result
       console.log('=== CALCULATION RESULT ===');
       console.log('Print Area:', res.volumePrint.toFixed(2), 'm²');
-      console.log('Material Needed:', res.volumeBahan.toFixed(2), 'm²');
-      console.log('Waste:', res.volumeWaste.toFixed(2), 'm²');
-      console.log('Panels:', res.numPanels);
-      console.log('Print Service Cost:', res.costPrintService);
+      console.log('Material Cost:', res.materialCost);
       console.log('Total Cost:', res.totalCost);
-      console.log('=========================');
 
-      // 9. Save to History (Supabase)
+      // 8. Save to History
       saveToHistory(res, {
         projectName,
         walls: walls.map(w => ({
-          width: parseFloat(w.width), // simpan dalam cm untuk history
+          width: parseFloat(w.width),
           height: parseFloat(w.height)
         })).filter(w => w.width > 0 && w.height > 0),
         materialType,
@@ -244,7 +238,6 @@ export default function Dashboard() {
     }
   };
 
-  // Fungsi untuk save calculation ke database Supabase
   const saveToHistory = async (
     result: CalculationResult,
     metadata: {
@@ -279,12 +272,10 @@ export default function Dashboard() {
       bleedHeight: metadata.bleedHeight / 100
     };
 
-    // Hitung design service cost (custom atau fixed)
     const designServiceCost = isDesignCustom
       ? parseInt(designServiceCustom || '0')
       : metadata.addons.designService;
 
-    // ✅ Siapkan data insert (SATU tempat saja)
     const insertData = {
       user_id: user.id,
       project_name: metadata.projectName || null,
@@ -312,69 +303,13 @@ export default function Dashboard() {
       total_cost: result.totalCost
     };
 
-    console.log('=== SAVE TO HISTORY DEBUG ===');
-    console.log('Insert Data:', insertData);
-
-    // ✅ SATU insert saja
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('calculations')
-      .insert(insertData)
-      .select();
+      .insert(insertData);
 
     if (error) {
-      console.error('❌ Supabase Error:', error);
-      console.error('Error details:', {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code
-      });
-    } else {
-      console.log('✅ Successfully saved:', data);
+      console.error('Failed to save to history:', error);
     }
-  };
-
-  // Helper function untuk get installation rate
-  const getInstallationRate = () => {
-    const rates: Record<string, Record<string, number>> = {
-        SURABAYA: { normal: 50000, panel: 55000, void: 0 },
-        LUAR_SURABAYA: { normal: 100000, panel: 110000, void: 180000 },
-        JAKARTA: { normal: 65000, panel: 70000, void: 130000 },
-        BANDUNG: { normal: 55000, panel: 70000, void: 70000 }
-    };
-
-    const cityRates = rates[installationCity] || rates.SURABAYA;
-    let rate = cityRates[installationType];
-    
-    // Void = double normal rate untuk Surabaya
-    if (installationType === 'void' && installationCity === 'SURABAYA') {
-        rate = cityRates.normal * 2;
-    }
-    
-    return rate;
-  };
-
- // Helper function untuk calculate installation cost
-  const calculateInstallationCost = (area: number) => {
-    const rate = getInstallationRate();
-    let cost = area * rate;
-    
-    // Apply minimum charge
-    if (installationCity === 'SURABAYA') {
-        const minCharge = installationType === 'normal' ? 300000 : 350000;
-        const minArea = 8;
-        if (area < minArea) {
-        cost = Math.max(cost, minCharge);
-        }
-    } else if (installationCity === 'JAKARTA') {
-        const minCharge = 550000;
-        const minArea = 10;
-        if (area < minArea) {
-        cost = Math.max(cost, minCharge);
-        }
-    }
-    
-    return cost;
   };
 
   const handleLogout = async () => {
@@ -403,7 +338,7 @@ export default function Dashboard() {
       </div>
     );
   }
-  
+
   if (!user) return null;
 
   return (
@@ -416,7 +351,6 @@ export default function Dashboard() {
           </h1>
           <p className="text-sm text-slate-500 mt-1">Calculator Pro</p>
         </div>
-        
         <nav className="p-4 space-y-2">
           <a href="/dashboard" className="flex items-center gap-3 px-4 py-3 bg-indigo-600/10 text-indigo-400 rounded-xl font-medium transition border border-indigo-600/20">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -424,14 +358,12 @@ export default function Dashboard() {
             </svg>
             Calculator
           </a>
-          
           <a href="/history" className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-slate-800 hover:text-slate-200 rounded-xl font-medium transition">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             History
           </a>
-          
           {user.role === 'admin' && (
             <a href="/admin" className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-slate-800 hover:text-slate-200 rounded-xl font-medium transition">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -441,7 +373,6 @@ export default function Dashboard() {
             </a>
           )}
         </nav>
-        
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-800">
           <div className="flex items-center gap-3 px-4 py-3">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
@@ -452,7 +383,7 @@ export default function Dashboard() {
               <p className="text-xs text-slate-500 capitalize">{user.role}</p>
             </div>
           </div>
-          <button 
+          <button
             onClick={handleLogout}
             className="w-full mt-2 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition"
           >
@@ -551,11 +482,13 @@ export default function Dashboard() {
                     </p>
                   </div>
                   <div className={`px-4 py-2 rounded-xl font-semibold ${
-                    user.role === 'designer' 
-                      ? 'bg-purple-500/20 text-purple-400' 
-                      : 'bg-blue-500/20 text-blue-400'
+                    user.role === 'designer'
+                      ? 'bg-purple-500/20 text-purple-400'
+                      : user.role === 'reseller_partner'
+                        ? 'bg-blue-500/20 text-blue-400'
+                        : 'bg-blue-500/20 text-blue-400'
                   }`}>
-                    {user.role === 'designer' ? 'Designer' : 'Reseller'} Pricing
+                    {user.role === 'designer' ? 'Designer' : user.role === 'reseller_partner' ? 'Reseller Partner' : 'Reseller'} Pricing
                   </div>
                 </div>
               </div>
@@ -575,7 +508,6 @@ export default function Dashboard() {
                   Add Wall
                 </button>
               </div>
-
               <div className="space-y-3">
                 {walls.map((wall) => (
                   <div key={wall.id} className="flex gap-3 items-start p-3 bg-slate-800/50 rounded-xl border border-slate-700">
@@ -628,7 +560,6 @@ export default function Dashboard() {
               <p className="text-sm text-slate-400 mb-4">
                 Tambahkan area lebihan untuk trimming dan pemasangan
               </p>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -645,7 +576,6 @@ export default function Dashboard() {
                   />
                   <p className="text-xs text-slate-500 mt-1">Per sisi (kiri + kanan)</p>
                 </div>
-
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
                     Bleed Height (cm)
@@ -662,96 +592,12 @@ export default function Dashboard() {
                   <p className="text-xs text-slate-500 mt-1">Per sisi (atas + bawah)</p>
                 </div>
               </div>
-
               <div className="mt-4 p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
                 <p className="text-sm text-indigo-300">
                   <span className="font-semibold">Total tambahan:</span> {bleedWidth * 2}cm (lebar) × {bleedHeight * 2}cm (tinggi)
                 </p>
               </div>
             </div>
-
-            {/* Material Selection
-            <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-white">Material Source</h2>
-                <span className="text-xs text-slate-400">
-                  Using: <span className="text-indigo-400 font-semibold capitalize">{priceType}</span> pricing
-                </span>
-              </div>
-              
-              <div className="flex gap-4 mb-4">
-                <button
-                  onClick={() => setMaterialType('krearte')}
-                  className={`flex-1 px-4 py-3 rounded-xl font-medium transition ${
-                    materialType === 'krearte' 
-                      ? 'bg-indigo-600 text-white' 
-                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                  }`}
-                >
-                  <div className="flex flex-col items-center gap-1">
-                    <span>Krearte Material</span>
-                    <span className="text-xs opacity-75">(Reseller A)</span>
-                  </div>
-                </button>
-                {(user.role === 'reseller' || user.role === 'admin') && (
-                  <button
-                    onClick={() => setMaterialType('customer')}
-                    className={`flex-1 px-4 py-3 rounded-xl font-medium transition ${
-                      materialType === 'customer' 
-                        ? 'bg-indigo-600 text-white' 
-                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                    }`}
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      <span>Customer Material</span>
-                      <span className="text-xs opacity-75">(Reseller B)</span>
-                    </div>
-                  </button>
-                )}
-              </div>
-
-              {materialType === 'krearte' ? (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Select Material
-                    </label>
-                    <select 
-                      onChange={(e) => setSelectedMaterialId(Number(e.target.value))} 
-                      value={selectedMaterialId || ''}
-                      className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                    >
-                      <option value="">Choose material...</option>
-                      {materials.map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} - {m.type}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Select Print Service
-                    </label>
-                    <select 
-                      onChange={(e) => setSelectedCustomerMaterialId(Number(e.target.value))} 
-                      value={selectedCustomerMaterialId || ''}
-                      className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                    >
-                      <option value="">Choose service...</option>
-                      {customerMaterials.map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} ({m.category === 'standard' ? 'Standard' : 'Karpet/Blind'})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-            </div> */}
 
             {/* Material Selection */}
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
@@ -761,13 +607,12 @@ export default function Dashboard() {
                   Using: <span className="text-indigo-400 font-semibold capitalize">{priceType}</span> pricing
                 </span>
               </div>
-              
               <div className="flex gap-4 mb-4">
                 <button
                   onClick={() => setMaterialType('krearte')}
                   className={`flex-1 px-4 py-3 rounded-xl font-medium transition ${
-                    materialType === 'krearte' 
-                      ? 'bg-indigo-600 text-white' 
+                    materialType === 'krearte'
+                      ? 'bg-indigo-600 text-white'
                       : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                   }`}
                 >
@@ -780,8 +625,8 @@ export default function Dashboard() {
                   <button
                     onClick={() => setMaterialType('customer')}
                     className={`flex-1 px-4 py-3 rounded-xl font-medium transition ${
-                      materialType === 'customer' 
-                        ? 'bg-indigo-600 text-white' 
+                      materialType === 'customer'
+                        ? 'bg-indigo-600 text-white'
                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                     }`}
                   >
@@ -794,13 +639,14 @@ export default function Dashboard() {
               </div>
 
               {materialType === 'krearte' ? (
+                // ✅ KREARTE MATERIAL (Retail, Designer, Reseller A)
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-300 mb-2">
                       Select Material
                     </label>
-                    <select 
-                      onChange={(e) => setSelectedMaterialId(Number(e.target.value))} 
+                    <select
+                      onChange={(e) => setSelectedMaterialId(Number(e.target.value))}
                       value={selectedMaterialId || ''}
                       className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                     >
@@ -813,15 +659,15 @@ export default function Dashboard() {
                     </select>
                   </div>
                 </div>
-              ) : materialType === 'customer' && priceType === 'reseller_partner' ? (
-                // ✅ Khusus Reseller Partner - Pilih Print Service
+              ) : priceType === 'reseller_partner' ? (
+                // ✅ RESELLER PARTNER - Pilih Print Service + Width
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Select Print Service Type
+                      Select Print Service Type *
                     </label>
-                    <select 
-                      onChange={(e) => setSelectedPrintServiceId(Number(e.target.value))} 
+                    <select
+                      onChange={(e) => setSelectedPrintServiceId(Number(e.target.value))}
                       value={selectedPrintServiceId || ''}
                       className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                     >
@@ -833,7 +679,40 @@ export default function Dashboard() {
                       ))}
                     </select>
                   </div>
-                  
+
+                  {/* Width Selection untuk Partner */}
+                  {selectedPrintServiceId && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-slate-300 mb-2">
+                        Select Material Width
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        {printServices
+                          .find(s => s.id === selectedPrintServiceId)
+                          ?.width_options?.map((option: WidthOption, idx: number) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setSelectedPrintWidth(option.width)}
+                              className={`px-4 py-3 rounded-xl font-medium transition ${
+                                selectedPrintWidth === option.width
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                      </div>
+                      {selectedPrintWidth && (
+                        <p className="text-xs text-indigo-400 mt-2">
+                          Selected width: {(selectedPrintWidth * 100).toFixed(0)}cm ({selectedPrintWidth.toFixed(2)}m)
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Info Print Service */}
                   {selectedPrintServiceId && (
                     <div className="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
                       <p className="text-sm text-indigo-300">
@@ -848,104 +727,102 @@ export default function Dashboard() {
                   )}
                 </div>
               ) : (
-                // Customer Material biasa (bukan Partner)
+                // ✅ RESELLER B (biasa) - Pilih Customer Material SAJA (width sudah include)
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Select Print Service
+                      Select Customer Material
                     </label>
-                    <select 
-                      onChange={(e) => setSelectedCustomerMaterialId(Number(e.target.value))} 
+                    <select
+                      onChange={(e) => {
+                        const id = Number(e.target.value);
+                        setSelectedCustomerMaterialId(id);
+                        // Set width dari material yang dipilih
+                        const selectedMat = customerMaterials.find(m => m.id === id);
+                        if (selectedMat) {
+                          setSelectedWidth(selectedMat.width);
+                        }
+                      }}
                       value={selectedCustomerMaterialId || ''}
                       className="w-full px-4 py-3 border border-slate-700 rounded-xl bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                     >
-                      <option value="">Choose service...</option>
+                      <option value="">Choose material...</option>
                       {customerMaterials.map(m => (
                         <option key={m.id} value={m.id}>
-                          {m.name} ({m.category === 'standard' ? 'Standard' : 'Karpet/Blind'})
+                          {m.name} - Rp {m.price_print.toLocaleString('id-ID')}/m²
                         </option>
                       ))}
                     </select>
                   </div>
+
+                  {/* Info Material */}
+                  {selectedCustomerMaterialId && (
+                    <div className="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
+                      <p className="text-sm text-indigo-300">
+                        <span className="font-semibold">Material:</span>{' '}
+                        {customerMaterials.find(m => m.id === selectedCustomerMaterialId)?.name}
+                      </p>
+                      <p className="text-sm text-indigo-300 mt-1">
+                        <span className="font-semibold">Width:</span> {
+                          ((customerMaterials.find(m => m.id === selectedCustomerMaterialId)?.width || 0) * 100).toFixed(0)
+                        }cm
+                      </p>
+                      <p className="text-sm text-indigo-300 mt-1">
+                        <span className="font-semibold">Price:</span> Rp {' '}
+                        {customerMaterials.find(m => m.id === selectedCustomerMaterialId)?.price_print.toLocaleString('id-ID')}/m²
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-            {/* Width Selection - Khusus Reseller Partner */}
-            {priceType === 'reseller_partner' && selectedPrintServiceId && (
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Select Material Width
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  {printServices
-                    .find(s => s.id === selectedPrintServiceId)
-                    ?.width_options?.map((option, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setSelectedPrintWidth(option.width)}
-                        className={`px-4 py-3 rounded-xl font-medium transition ${
-                          selectedPrintWidth === option.width
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                        }`}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                </div>
-                {selectedPrintWidth && (
-                  <p className="text-xs text-indigo-400 mt-2">
-                    Selected width: {(selectedPrintWidth * 100).toFixed(0)}cm ({selectedPrintWidth.toFixed(2)}m)
-                  </p>
-                )}
-              </div>
-            )}
 
             {/* Add-ons */}
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6">
               <h2 className="text-lg font-semibold text-white mb-4">Add-on Services</h2>
-              
               <div className="space-y-3">
+                {/* 2.5D Print */}
                 <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
                   <div>
                     <p className="font-medium text-slate-200">2.5D Print</p>
                     <p className="text-sm text-slate-500">
                       Embossed effect (+Rp {
                         priceType === 'retail' ? '625.000' :
-                        priceType === 'reseller_partner' ? '350.000' :
-                        '500.000'
+                          priceType === 'reseller_partner' ? '350.000' :
+                            '500.000'
                       }/m²)
                     </p>
                   </div>
-                  <input 
-                    type="checkbox" 
-                    checked={is25d} 
+                  <input
+                    type="checkbox"
+                    checked={is25d}
                     onChange={(e) => setIs25d(e.target.checked)}
                     className="w-5 h-5 text-indigo-600 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
                   />
                 </label>
 
+                {/* Image Enhancement */}
                 <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
                   <div>
                     <p className="font-medium text-slate-200">Image Enhancement</p>
-                    <p className="text-sm text-slate-500">Improve image quality (+Rp 50,000)</p>
+                    <p className="text-sm text-slate-500">Improve image quality (+Rp 100.000)</p>
                   </div>
-                  <input 
-                    type="checkbox" 
-                    checked={imageEnhance} 
+                  <input
+                    type="checkbox"
+                    checked={imageEnhance}
                     onChange={(e) => setImageEnhance(e.target.checked)}
                     className="w-5 h-5 text-indigo-600 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
                   />
                 </label>
 
+                {/* Shutterstock */}
                 <div className="flex items-center justify-between p-4 border border-slate-700 rounded-xl">
                   <div>
                     <p className="font-medium text-slate-200">Shutterstock</p>
-                    <p className="text-sm text-slate-500">Stock images (Rp 80,000/image)</p>
+                    <p className="text-sm text-slate-500">Stock images (Rp 80.000/image)</p>
                   </div>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     min="0"
                     value={shutterstockQty}
                     onChange={(e) => setShutterstockQty(Number(e.target.value))}
@@ -953,15 +830,15 @@ export default function Dashboard() {
                   />
                 </div>
 
-                {/* Sample Add-on */}
+                {/* Sample Material */}
                 <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
                   <div>
                     <p className="font-medium text-slate-200">Sample Material</p>
                     <p className="text-sm text-slate-500">Physical sample for preview</p>
                   </div>
-                  <input 
-                    type="checkbox" 
-                    checked={includeSample} 
+                  <input
+                    type="checkbox"
+                    checked={includeSample}
                     onChange={(e) => {
                       setIncludeSample(e.target.checked);
                       if (!e.target.checked) setSampleQty(0);
@@ -969,7 +846,6 @@ export default function Dashboard() {
                     className="w-5 h-5 text-indigo-600 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
                   />
                 </label>
-
                 {includeSample && selectedMaterial && (
                   <div className="p-4 border border-slate-700 rounded-xl bg-slate-800/30 space-y-4">
                     <div>
@@ -986,7 +862,6 @@ export default function Dashboard() {
                       />
                       <p className="text-xs text-slate-500 mt-1">Max 10 samples</p>
                     </div>
-
                     <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
                       <p className="text-sm text-indigo-300">
                         <span className="font-semibold">Price per sample:</span> Rp {selectedMaterial.sample_price?.toLocaleString('id-ID') || 0}
@@ -998,9 +873,10 @@ export default function Dashboard() {
                   </div>
                 )}
 
+                {/* Design Service */}
                 <div className="p-4 border border-slate-700 rounded-xl">
                   <p className="font-medium text-slate-200 mb-2">Design Service</p>
-                  <select 
+                  <select
                     onChange={(e) => {
                       const value = e.target.value;
                       if (value === 'custom') {
@@ -1015,12 +891,11 @@ export default function Dashboard() {
                     className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value={0}>No design service</option>
-                    <option value={150000}>1 Day - Rp 150,000</option>
-                    <option value={900000}>1 Week - Rp 900,000</option>
-                    <option value={1800000}>2 Weeks - Rp 1,800,000</option>
+                    <option value={150000}>1 Day - Rp 150.000</option>
+                    <option value={900000}>1 Week - Rp 900.000</option>
+                    <option value={1800000}>2 Weeks - Rp 1.800.000</option>
                     <option value="custom">Custom Amount</option>
                   </select>
-
                   {isDesignCustom && (
                     <div className="mt-3">
                       <label className="block text-xs font-medium text-slate-400 mb-1">
@@ -1042,94 +917,77 @@ export default function Dashboard() {
 
                 {/* Installation */}
                 <div className="space-y-3">
-                <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
+                  <label className="flex items-center justify-between p-4 border border-slate-700 rounded-xl hover:bg-slate-800/50 cursor-pointer transition">
                     <div>
-                    <p className="font-medium text-slate-200">Installation Service</p>
-                    <p className="text-sm text-slate-500">Professional installation service</p>
+                      <p className="font-medium text-slate-200">Installation Service</p>
+                      <p className="text-sm text-slate-500">Professional installation service</p>
                     </div>
-                    <input 
-                    type="checkbox" 
-                    checked={installation} 
-                    onChange={(e) => setInstallation(e.target.checked)}
-                    className="w-5 h-5 text-indigo-600 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
+                    <input
+                      type="checkbox"
+                      checked={installation}
+                      onChange={(e) => setInstallation(e.target.checked)}
+                      className="w-5 h-5 text-indigo-600 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
                     />
-                </label>
-
-                {installation && (
+                  </label>
+                  {installation && (
                     <div className="p-4 border border-slate-700 rounded-xl bg-slate-800/30 space-y-4">
-                    {/* City Selection */}
-                    <div>
+                      <div>
                         <label className="block text-sm font-medium text-slate-300 mb-2">
-                        Installation Location
+                          Installation Location
                         </label>
                         <select
-                        value={installationCity}
-                        onChange={(e) => setInstallationCity(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500"
+                          value={installationCity}
+                          onChange={(e) => setInstallationCity(e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white focus:ring-2 focus:ring-indigo-500"
                         >
-                        <option value="SURABAYA">Surabaya</option>
-                        <option value="LUAR_SURABAYA">Luar Surabaya</option>
-                        <option value="JAKARTA">Jakarta</option>
-                        <option value="BANDUNG">Bandung</option>
+                          <option value="SURABAYA">Surabaya</option>
+                          <option value="LUAR_SURABAYA">Luar Surabaya</option>
+                          <option value="JAKARTA">Jakarta</option>
+                          <option value="BANDUNG">Bandung</option>
                         </select>
-                    </div>
-
-                    {/* Installation Type */}
-                    <div>
+                      </div>
+                      <div>
                         <label className="block text-sm font-medium text-slate-300 mb-2">
-                        Installation Type
+                          Installation Type
                         </label>
                         <div className="grid grid-cols-3 gap-2">
-                        <button
+                          <button
                             type="button"
                             onClick={() => setInstallationType('normal')}
                             className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                            installationType === 'normal'
+                              installationType === 'normal'
                                 ? 'bg-indigo-600 text-white'
                                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                             }`}
-                        >
+                          >
                             Normal
-                        </button>
-                        <button
+                          </button>
+                          <button
                             type="button"
                             onClick={() => setInstallationType('panel')}
                             className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                            installationType === 'panel'
+                              installationType === 'panel'
                                 ? 'bg-indigo-600 text-white'
                                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                             }`}
-                        >
+                          >
                             Panel
-                        </button>
-                        <button
+                          </button>
+                          <button
                             type="button"
                             onClick={() => setInstallationType('void')}
                             className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                            installationType === 'void'
+                              installationType === 'void'
                                 ? 'bg-indigo-600 text-white'
                                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                             }`}
-                        >
+                          >
                             Void (&gt;3.7m)
-                        </button>
+                          </button>
                         </div>
+                      </div>
                     </div>
-
-                    {/* Price Info */}
-                    <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
-                        <p className="text-sm text-indigo-300">
-                        <span className="font-semibold">Rate:</span> Rp {getInstallationRate().toLocaleString('id-ID')}/m²
-                        </p>
-                        {installationCity === 'SURABAYA' && installationType === 'normal' && (
-                        <p className="text-xs text-slate-400 mt-1">Min. charge 8m² = Rp 300.000</p>
-                        )}
-                        {installationCity === 'JAKARTA' && installationType === 'normal' && (
-                        <p className="text-xs text-slate-400 mt-1">Min. charge 10m² = Rp 550.000</p>
-                        )}
-                    </div>
-                    </div>
-                )}
+                  )}
                 </div>
               </div>
             </div>
@@ -1140,7 +998,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            <button 
+            <button
               onClick={handleCalculate}
               className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-semibold rounded-xl hover:from-indigo-700 hover:to-purple-700 transition shadow-lg shadow-indigo-600/20"
             >
@@ -1152,7 +1010,6 @@ export default function Dashboard() {
           <div className="space-y-6">
             <div className="bg-slate-900 rounded-2xl shadow-xl border border-slate-800 p-6 min-h-[600px]">
               <h2 className="text-xl font-semibold text-white mb-6">Calculation Results</h2>
-              
               {result ? (
                 <div className="space-y-6">
                   {/* Project Info */}
@@ -1173,7 +1030,6 @@ export default function Dashboard() {
                         const widthWithBleed = widthCm + (bleedWidth * 2);
                         const heightWithBleed = heightCm + (bleedHeight * 2);
                         const areaPrint = (widthWithBleed / 100) * (heightWithBleed / 100);
-                        
                         return (
                           <div key={wall.id} className="space-y-1 py-2 px-3 bg-slate-800/30 rounded-lg">
                             <div className="flex justify-between text-sm">
@@ -1211,6 +1067,7 @@ export default function Dashboard() {
                       * Setiap wall mendapat tambahan bleed {bleedWidth * 2}cm (lebar) × {bleedHeight * 2}cm (tinggi)
                     </p>
                   </div>
+
                   {/* Area Calculations */}
                   <div>
                     <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Area Calculations</h3>
@@ -1239,28 +1096,29 @@ export default function Dashboard() {
                     <h3 className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Cost Breakdown</h3>
                     <div className="space-y-2 text-sm">
                       {/* Material Cost */}
-                      {result && result.materialCost > 0 && (
+                      {result.materialCost > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">Material Cost</span>
                           <div className="text-right">
                             <p className="text-slate-200">Rp {result.materialCost.toLocaleString('id-ID')}</p>
                             <p className="text-xs text-slate-500">
                               {result.volumePrint.toFixed(2)} m² × Rp {
-                                materialType === 'krearte' 
+                                materialType === 'krearte'
                                   ? (
-                                      priceType === 'retail' 
-                                        ? selectedMaterial?.price_retail 
-                                        : priceType === 'designer' 
-                                          ? selectedMaterial?.price_designer 
-                                          : selectedMaterial?.price_reseller
-                                    )?.toLocaleString('id-ID')
+                                    priceType === 'retail'
+                                      ? selectedMaterial?.price_retail
+                                      : priceType === 'designer'
+                                        ? selectedMaterial?.price_designer
+                                        : selectedMaterial?.price_reseller
+                                  )?.toLocaleString('id-ID')
                                   : customerMaterials.find(m => m.id === selectedCustomerMaterialId)?.price_print.toLocaleString('id-ID')
                               }/m²
                             </p>
                           </div>
                         </div>
                       )}
-                      
+
+                      {/* Waste Cost */}
                       {result.wasteCost > 0 && (
                         <div className="flex justify-between py-2 pl-4 border-l-2 border-orange-500/30">
                           <span className="text-orange-400">Waste Cost</span>
@@ -1272,7 +1130,21 @@ export default function Dashboard() {
                           </div>
                         </div>
                       )}
-                      
+
+                      {/* Print Service Cost */}
+                      {result.costPrintService > 0 && (
+                        <div className="flex justify-between py-2">
+                          <span className="text-slate-400">Print Service</span>
+                          <div className="text-right">
+                            <p className="text-slate-200">Rp {result.costPrintService.toLocaleString('id-ID')}</p>
+                            <p className="text-xs text-slate-500">
+                              {result.volumePrint.toFixed(2)} m² × Rp {printServices.find(s => s.id === selectedPrintServiceId)?.price_per_m2.toLocaleString('id-ID')}/m²
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 2.5D Print */}
                       {result.cost25d > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">2.5D Print</span>
@@ -1281,28 +1153,31 @@ export default function Dashboard() {
                             <p className="text-xs text-slate-500">
                               {result.volumePrint.toFixed(2)} m² × Rp {
                                 priceType === 'retail' ? '625.000' :
-                                priceType === 'reseller_partner' ? '350.000' :
-                                '500.000'
+                                  priceType === 'reseller_partner' ? '350.000' :
+                                    '500.000'
                               }/m²
                             </p>
                           </div>
                         </div>
                       )}
-                      
+
+                      {/* Design Service */}
                       {result.costDesign > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">Design Service</span>
                           <span className="text-slate-200">Rp {result.costDesign.toLocaleString('id-ID')}</span>
                         </div>
                       )}
-                      
+
+                      {/* Image Enhancement */}
                       {result.costEnhance > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">Image Enhancement</span>
                           <span className="text-slate-200">Rp {result.costEnhance.toLocaleString('id-ID')}</span>
                         </div>
                       )}
-                      
+
+                      {/* Shutterstock */}
                       {result.costShutterstock > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">Shutterstock</span>
@@ -1313,6 +1188,7 @@ export default function Dashboard() {
                         </div>
                       )}
 
+                      {/* Sample Material */}
                       {result.costSample > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">Sample Material</span>
@@ -1324,13 +1200,14 @@ export default function Dashboard() {
                           </div>
                         </div>
                       )}
-                      
+
+                      {/* Installation */}
                       {result.costInstallation > 0 && (
                         <div className="flex justify-between py-2">
                           <span className="text-slate-400">Installation</span>
                           <div className="text-right">
                             <p className="text-slate-200">Rp {result.costInstallation.toLocaleString('id-ID')}</p>
-                            <p className="text-xs text-slate-500">{result.volumePrint.toFixed(2)} m² × Rp 100.000/m²</p>
+                            <p className="text-xs text-slate-500">{result.volumePrint.toFixed(2)} m²</p>
                           </div>
                         </div>
                       )}
